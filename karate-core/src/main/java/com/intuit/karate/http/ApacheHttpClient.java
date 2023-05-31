@@ -32,7 +32,6 @@ import io.netty.handler.codec.http.cookie.ClientCookieDecoder;
 import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.ProxySelector;
@@ -47,45 +46,50 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import javax.net.ssl.SSLContext;
-import org.apache.http.Header;
-import org.apache.http.HttpEntity;
-import org.apache.http.HttpException;
-import org.apache.http.HttpHost;
-import org.apache.http.HttpMessage;
-import org.apache.http.HttpRequestInterceptor;
-import org.apache.http.auth.AuthScope;
-import org.apache.http.auth.UsernamePasswordCredentials;
-import org.apache.http.client.ClientProtocolException;
-import org.apache.http.client.CookieStore;
-import org.apache.http.client.CredentialsProvider;
-import org.apache.http.client.config.RequestConfig;
-import org.apache.http.client.entity.EntityBuilder;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.RequestBuilder;
-import org.apache.http.client.utils.URIBuilder;
-import org.apache.http.config.Registry;
-import org.apache.http.config.RegistryBuilder;
-import org.apache.http.config.SocketConfig;
+
+import org.apache.hc.client5.http.config.ConnectionConfig;
+import org.apache.hc.client5.http.cookie.BasicCookieStore;
+import org.apache.hc.client5.http.cookie.Cookie;
+import org.apache.hc.client5.http.cookie.CookieOrigin;
+import org.apache.hc.client5.http.cookie.CookieSpecFactory;
+import org.apache.hc.client5.http.cookie.CookieStore;
+import org.apache.hc.client5.http.cookie.MalformedCookieException;
+import org.apache.hc.client5.http.cookie.StandardCookieSpec;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
+import org.apache.hc.core5.http.Header;
+import org.apache.hc.core5.http.HttpEntity;
+import org.apache.hc.core5.http.HttpException;
+import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.http.HttpMessage;
+import org.apache.hc.core5.http.HttpRequestInterceptor;
+import org.apache.hc.core5.http.EntityDetails;
+import org.apache.hc.client5.http.auth.AuthScope;
+import org.apache.hc.client5.http.auth.UsernamePasswordCredentials;
+import org.apache.hc.client5.http.ClientProtocolException;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.entity.EntityBuilder;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
+import org.apache.hc.core5.http.io.support.ClassicRequestBuilder;
+import org.apache.hc.core5.net.URIBuilder;
+import org.apache.hc.core5.http.config.Registry;
+import org.apache.hc.core5.http.config.RegistryBuilder;
+import org.apache.hc.core5.http.io.SocketConfig;
 import org.apache.http.conn.ssl.LenientSslConnectionSocketFactory;
-import org.apache.http.conn.ssl.NoopHostnameVerifier;
-import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
-import org.apache.http.conn.ssl.TrustAllStrategy;
-import org.apache.http.conn.ssl.TrustSelfSignedStrategy;
-import org.apache.http.cookie.Cookie;
-import org.apache.http.cookie.CookieOrigin;
-import org.apache.http.cookie.CookieSpecProvider;
-import org.apache.http.cookie.MalformedCookieException;
-import org.apache.http.impl.client.BasicCookieStore;
-import org.apache.http.impl.client.BasicCredentialsProvider;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClientBuilder;
-import org.apache.http.impl.client.LaxRedirectStrategy;
-import org.apache.http.impl.conn.SystemDefaultRoutePlanner;
-import org.apache.http.impl.cookie.DefaultCookieSpec;
-import org.apache.http.protocol.HttpContext;
-import org.apache.http.ssl.SSLContextBuilder;
-import org.apache.http.ssl.SSLContexts;
+import org.apache.hc.client5.http.ssl.NoopHostnameVerifier;
+import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactory;
+import org.apache.hc.client5.http.ssl.TrustAllStrategy;
+import org.apache.hc.client5.http.ssl.TrustSelfSignedStrategy;
+import org.apache.hc.client5.http.impl.auth.BasicCredentialsProvider;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClientBuilder;
+import org.apache.hc.client5.http.impl.DefaultRedirectStrategy;
+import org.apache.hc.client5.http.impl.routing.SystemDefaultRoutePlanner;
+import org.apache.hc.client5.http.impl.cookie.CookieSpecBase;
+import org.apache.hc.core5.http.protocol.HttpContext;
+import org.apache.hc.core5.ssl.SSLContextBuilder;
+import org.apache.hc.core5.ssl.SSLContexts;
 
 /**
  *
@@ -100,31 +104,30 @@ public class ApacheHttpClient implements HttpClient, HttpRequestInterceptor {
     private HttpClientBuilder clientBuilder;
     private CookieStore cookieStore;
 
-    public static class LenientCookieSpec extends DefaultCookieSpec {
+        public static class LenientCookieSpec extends CookieSpecBase {
 
         static final String KARATE = "karate";
 
         public LenientCookieSpec() {
-            super(new String[]{"EEE, dd-MMM-yy HH:mm:ss z", "EEE, dd MMM yyyy HH:mm:ss Z"}, false);
+            super();
         }
 
-        @Override
-        public boolean match(Cookie cookie, CookieOrigin origin) {
-            return true;
-        }
-
-        @Override
-        public void validate(Cookie cookie, CookieOrigin origin) throws MalformedCookieException {
-            // do nothing
-        }
-
-        public static Registry<CookieSpecProvider> registry() {
-            CookieSpecProvider specProvider = (HttpContext hc) -> new LenientCookieSpec();
-            return RegistryBuilder.<CookieSpecProvider>create()
+        public static Registry<CookieSpecFactory> registry() {
+            CookieSpecFactory specProvider = (HttpContext hc) -> new LenientCookieSpec();
+            return RegistryBuilder.<CookieSpecFactory>create()
                     .register(KARATE, specProvider).build();
         }
 
-    }
+            @Override
+            public List<Cookie> parse(Header header, CookieOrigin cookieOrigin) throws MalformedCookieException {
+                return null;
+            }
+
+            @Override
+            public List<Header> formatCookies(List<Cookie> list) {
+                return null;
+            }
+        }
 
     public ApacheHttpClient(ScenarioEngine engine) {
         this.engine = engine;
@@ -134,12 +137,17 @@ public class ApacheHttpClient implements HttpClient, HttpRequestInterceptor {
     }
 
     private void configure(Config config) {
+        PoolingHttpClientConnectionManagerBuilder connectionManagerBuilder = PoolingHttpClientConnectionManagerBuilder.create();
+
         clientBuilder = HttpClientBuilder.create();
+        clientBuilder.setDefaultRequestConfig(RequestConfig.custom()
+                .setCookieSpec(StandardCookieSpec.RELAXED)
+                .build());
         clientBuilder.disableAutomaticRetries();
         if (!config.isFollowRedirects()) {
             clientBuilder.disableRedirectHandling();
         } else { // support redirect on POST by default
-            clientBuilder.setRedirectStrategy(LaxRedirectStrategy.INSTANCE);
+            clientBuilder.setRedirectStrategy(DefaultRedirectStrategy.INSTANCE);
         }
         cookieStore = new BasicCookieStore();
         clientBuilder.setDefaultCookieStore(cookieStore);
@@ -174,36 +182,27 @@ public class ApacheHttpClient implements HttpClient, HttpRequestInterceptor {
                 } else {
                     socketFactory = new LenientSslConnectionSocketFactory(sslContext, new NoopHostnameVerifier());
                 }
-                clientBuilder.setSSLSocketFactory(socketFactory);
+                connectionManagerBuilder.setSSLSocketFactory(socketFactory);
             } catch (Exception e) {
                 logger.error("ssl context init failed: {}", e.getMessage());
                 throw new RuntimeException(e);
             }
         }
-        RequestConfig.Builder configBuilder = RequestConfig.custom()
+        connectionManagerBuilder.setDefaultConnectionConfig(ConnectionConfig.custom().setSocketTimeout(config.getReadTimeout(), TimeUnit.MILLISECONDS).setConnectTimeout(config.getConnectTimeout(), TimeUnit.MILLISECONDS).build());
+        clientBuilder.setDefaultRequestConfig(RequestConfig.custom()
                 .setCookieSpec(LenientCookieSpec.KARATE)
-                .setConnectTimeout(config.getConnectTimeout())
-                .setSocketTimeout(config.getReadTimeout());
-        if (config.getLocalAddress() != null) {
-            try {
-                InetAddress localAddress = InetAddress.getByName(config.getLocalAddress());
-                configBuilder.setLocalAddress(localAddress);
-            } catch (Exception e) {
-                logger.warn("failed to resolve local address: {} - {}", config.getLocalAddress(), e.getMessage());
-            }
-        }
-        clientBuilder.setDefaultRequestConfig(configBuilder.build());
-        SocketConfig.Builder socketBuilder = SocketConfig.custom().setSoTimeout(config.getConnectTimeout());
-        clientBuilder.setDefaultSocketConfig(socketBuilder.build());
+                .build());
+        SocketConfig.Builder socketBuilder = SocketConfig.custom().setSoTimeout(config.getConnectTimeout(), TimeUnit.MILLISECONDS);
+        connectionManagerBuilder.setDefaultSocketConfig(socketBuilder.build());
         if (config.getProxyUri() != null) {
             try {
                 URI proxyUri = new URIBuilder(config.getProxyUri()).build();
-                clientBuilder.setProxy(new HttpHost(proxyUri.getHost(), proxyUri.getPort(), proxyUri.getScheme()));
+                clientBuilder.setProxy(new HttpHost(proxyUri.getScheme(), proxyUri.getHost(), proxyUri.getPort()));
                 if (config.getProxyUsername() != null && config.getProxyPassword() != null) {
-                    CredentialsProvider credsProvider = new BasicCredentialsProvider();
+                    BasicCredentialsProvider credsProvider = new BasicCredentialsProvider();
                     credsProvider.setCredentials(
                             new AuthScope(proxyUri.getHost(), proxyUri.getPort()),
-                            new UsernamePasswordCredentials(config.getProxyUsername(), config.getProxyPassword()));
+                            new UsernamePasswordCredentials(config.getProxyUsername(), config.getProxyPassword().toCharArray()));
                     clientBuilder.setDefaultCredentialsProvider(credsProvider);
                 }
                 if (config.getNonProxyHosts() != null) {
@@ -228,7 +227,8 @@ public class ApacheHttpClient implements HttpClient, HttpRequestInterceptor {
                 throw new RuntimeException(e);
             }
         }
-        clientBuilder.addInterceptorLast(this);
+        clientBuilder = clientBuilder.setConnectionManager(connectionManagerBuilder.build());
+        clientBuilder.addRequestInterceptorLast(this);
     }
 
     @Override
@@ -246,7 +246,7 @@ public class ApacheHttpClient implements HttpClient, HttpRequestInterceptor {
     @Override
     public Response invoke(HttpRequest request) {
         this.request = request;
-        RequestBuilder requestBuilder = RequestBuilder.create(request.getMethod()).setUri(request.getUrl());
+        ClassicRequestBuilder requestBuilder = ClassicRequestBuilder.create(request.getMethod()).setUri(request.getUrl());
         if (request.getBody() != null) {
             EntityBuilder entityBuilder = EntityBuilder.create().setBinary(request.getBody());
             List<String> transferEncoding = request.getHeaderValues(HttpConstants.HDR_TRANSFER_ENCODING);
@@ -259,7 +259,7 @@ public class ApacheHttpClient implements HttpClient, HttpRequestInterceptor {
                         entityBuilder.chunked();
                     }
                     if (te.contains("gzip")) {
-                        entityBuilder.gzipCompress();
+                        entityBuilder.gzipCompressed();
                     }
                 }
                 request.removeHeader(HttpConstants.HDR_TRANSFER_ENCODING);
@@ -289,7 +289,7 @@ public class ApacheHttpClient implements HttpClient, HttpRequestInterceptor {
                 throw new RuntimeException(e);
             }
         }
-        int statusCode = httpResponse.getStatusLine().getStatusCode();
+        int statusCode = httpResponse.getCode();
         Map<String, List<String>> headers = toHeaders(httpResponse);
         List<Cookie> storedCookies = cookieStore.getCookies();
         Header[] requestCookieHeaders = httpResponse.getHeaders(HttpConstants.HDR_SET_COOKIE);
@@ -330,14 +330,14 @@ public class ApacheHttpClient implements HttpClient, HttpRequestInterceptor {
     }
 
     @Override
-    public void process(org.apache.http.HttpRequest hr, HttpContext hc) throws HttpException, IOException {
+    public void process(org.apache.hc.core5.http.HttpRequest hr, EntityDetails entityDetails, HttpContext hc) throws HttpException, IOException {
         request.setHeaders(toHeaders(hr));
         httpLogger.logRequest(getConfig(), request);
         request.setStartTime(System.currentTimeMillis());
     }
 
     private static Map<String, List<String>> toHeaders(HttpMessage msg) {
-        Header[] headers = msg.getAllHeaders();
+        Header[] headers = msg.getHeaders();
         Map<String, List<String>> map = new LinkedHashMap(headers.length);
         for (Header outer : headers) {
             String name = outer.getName();
